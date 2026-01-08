@@ -1,0 +1,4 @@
+,Baseline (mm),Transient PLR (%),Constriction vel (mm/s),Peak constriction (%),"PIPR (10–30s, unitless)",Net PIPR (Blue−Red),Net PIPR (Red−Blue)
+Blue,5.59,22.375,-0.554,22.375,0.001,,
+Red,5.933,0.582,-0.932,1.284,0.008,,
+Net (Blue-Red),,,,,,-0.007,0.007
