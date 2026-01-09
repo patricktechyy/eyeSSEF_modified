@@ -1,0 +1,40 @@
+{
+  "trial_label": "PLR_Tuna_L_1920x1080_30_4",
+  "n_frames": 3425,
+  "duration_s": 114.13333333333333,
+  "fps_est": 30.0,
+  "confidence_thresh": 0.75,
+  "flagged_pct_final": 0.0,
+  "interpolated_pct": 11.620437956204379,
+  "max_interpolated_gap_frames": 9,
+  "max_interpolated_gap_s": 0.3,
+  "r_raw_vs_interp_on_measured": 1.0,
+  "rmse_raw_vs_interp_on_measured_mm": 0.0,
+  "r_interp_vs_smooth": 0.9894456577314028,
+  "rmse_interp_vs_smooth_mm": 0.03876391349843409,
+  "mae_interp_vs_smooth_mm": 0.027378815896188312,
+  "nrmse_interp_vs_smooth": 0.01571510006693274,
+  "psd_total_power_ratio_smooth_over_interp": 0.9455637103433047,
+  "psd_highfreq_power_ratio_gt3Hz": 0.48798917492205174,
+  "blink_pit_count": 1,
+  "assumed_event_checks": [
+    {
+      "onset_s": 3.0,
+      "baseline_mm": 5.698095238095242,
+      "min_mm": 4.055238095238097,
+      "amplitude_mm": 1.642857142857145,
+      "relative_amplitude": 0.2883168978773193,
+      "time_to_min_s": 0.6333333333333329,
+      "latency10_s": 0.0
+    },
+    {
+      "onset_s": 63.25,
+      "baseline_mm": 5.840793650793653,
+      "min_mm": 5.785714285714288,
+      "amplitude_mm": 0.05507936507936506,
+      "relative_amplitude": 0.00943011658559121,
+      "time_to_min_s": 0.68333333333333,
+      "latency10_s": 0.01666666666666572
+    }
+  ]
+}
