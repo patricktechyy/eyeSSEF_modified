@@ -1,39 +1,26 @@
-<<<<<<< Updated upstream
-"""Watch an inbox folder for new .mp4 files and automatically run the pipeline.
+"""EyeSSEF inbox watcher (Mac) — SESSION MODE.
 
-Why:
-- You run the algorithm on the laptop (not on the Pi)
-- The Pi drops .mp4 recordings into the inbox (via rsync)
-- We process one file at a time (simple)
+You asked for this exact workflow:
 
-This script calls:
-  videoImplement/main.py       -> creates data/<session>/raw.csv + meta.json
-  videoImplement/process_one.py -> creates data/<session>/processed.csv
-=======
-"""Watch a Mac inbox folder for new video files and automatically run EyeSSEF 15 pipeline.
+During ONE session (one run of this script):
+  1) New videos arrive in ~/plr_inbox (from your Pi autosend).
+  2) For each new video: run **main.py only** to generate raw.csv.
+  3) Archive the source video.
+  4) Keep doing this for all trials in the session.
 
-Intended workflow (same as the original EyeSSEF_modified autosend):
-1) Raspberry Pi records videos into /home/<pi_user>/PLR_Video
-2) Pi runs plr_autosend.sh which rsync's videos into your Mac inbox as:
-      <video>.part  -> then renames to <video> when upload completes
-3) This watcher ignores *.part, waits until the final file is stable,
-   then runs the pipeline locally (Mac), and finally archives the video.
-
-Pipeline (EyeSSEF 15) (what this watcher enforces):
-  1) Detect a *new* video in the inbox root (ignores subfolders like _archive/)
-  2) Move it into inbox/_processing/ to prevent repeated triggers
-  3) Run raw extraction only:
-        videoImplement/main.py --input <video> --no_raw_plot --no_preprocess
-     -> writes videoImplement/data/<stem>/raw.csv (+ meta.json)
-  4) Move the video into inbox/_archive/ (so inbox stays clean)
-  5) Run preprocessing ONLY for that one trial folder and SHOW plots:
-        videoImplement/process.py --data videoImplement/data/<stem>
-     -> writes processed.csv + saves PNGs + opens interactive plot windows
+When you type `process` in the same Terminal:
+  - Create two folders inside the session:
+      session/.../trial/<each_video_stem>/   (raw + per-trial processed outputs)
+      session/.../average/                   (ONE averaged raw + processed outputs)
+  - For every trial in session/trial/*: run process.py (writes processed.csv + plots)
+  - Compute ONE average raw.csv across ALL trials -> session/average/raw.csv
+  - Run process.py on session/average (and SHOW interactive matplotlib windows)
+  - Exit, so the next run starts a new session.
 
 Notes:
-- By default, this processes ONE file at a time (simple + avoids GPU/CPU overload).
-- If watchdog is installed, it uses filesystem events; otherwise it falls back to polling.
->>>>>>> Stashed changes
+  - We force --resolution 1920x1080 for process.py (your constraint).
+  - Per-trial process.py runs with --no_show_plot to avoid opening a million windows.
+    The session average run DOES show interactive matplotlib windows.
 """
 
 from __future__ import annotations
@@ -42,34 +29,24 @@ import argparse
 import os
 import shutil
 import subprocess
-<<<<<<< Updated upstream
-import time
-from pathlib import Path
-
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
-
-
-VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi"}
-
-
-def wait_until_stable(path: Path, stable_for_s: float = 3.0, timeout_s: float = 600.0) -> bool:
-    """Wait until file size doesn't change for `stable_for_s` seconds."""
-=======
 import sys
 import time
+import select
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Optional, Set
+from typing import List, Optional, Set
+
+import numpy as np
+import pandas as pd
 
 
-VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi"}
+VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".h264"}
 RESERVED_SUBDIRS = {"_archive", "_processing"}
 
 
 def wait_until_stable(path: Path, stable_secs: float = 1.0, timeout_secs: float = 300.0) -> bool:
     """Return True when file size has been unchanged for `stable_secs` seconds."""
->>>>>>> Stashed changes
     start = time.time()
     last_size = -1
     stable_since = None
@@ -88,391 +65,395 @@ def wait_until_stable(path: Path, stable_secs: float = 1.0, timeout_secs: float 
         if size == last_size and size > 0:
             if stable_since is None:
                 stable_since = now
-<<<<<<< Updated upstream
-            elif (now - stable_since) >= stable_for_s:
-                # Extra check: can we open it for reading?
-                try:
-                    with open(path, "rb"):
-                        return True
-                except OSError:
-                    pass
-=======
             if (now - stable_since) >= stable_secs:
                 return True
->>>>>>> Stashed changes
         else:
             stable_since = None
             last_size = size
 
-<<<<<<< Updated upstream
-        if (now - start) > timeout_s:
-            return False
-
-        time.sleep(0.5)
-
-
-def run_pipeline(python_exe: Path, repo_dir: Path, video_path: Path, out_root: Path) -> None:
-    """Run main.py then process_one.py."""
-    vi_dir = repo_dir / "videoImplement"
-
-    # 1) raw extraction
-    subprocess.run(
-        [
-            str(python_exe),
-            "main.py",
-            "--video",
-            str(video_path),
-            "--out-root",
-            str(out_root),
-        ],
-        cwd=str(vi_dir),
-        check=True,
-    )
-
-    # Data folder name is video basename
-    data_dir = (vi_dir / out_root / video_path.stem).resolve()
-
-    # 2) preprocessing
-    subprocess.run(
-        [
-            str(python_exe),
-            "process_one.py",
-            "--data-dir",
-            str(data_dir),
-        ],
-=======
         if (now - start) > timeout_secs:
             return False
 
         time.sleep(0.2)
 
 
+def _is_candidate_video(p: Path, inbox_root: Path) -> bool:
+    if not p.is_file():
+        return False
+    if p.parent != inbox_root:
+        return False
+    if p.suffix.lower() not in VIDEO_EXTS:
+        return False
+    if p.name.endswith(".part"):
+        return False
+    # ignore anything that happens to be named like a reserved dir
+    if p.name in RESERVED_SUBDIRS:
+        return False
+    return True
+
+
 def _run_main_raw_only(python_exe: Path, repo_dir: Path, video_path: Path) -> None:
-    """Run only the raw extraction step (main.py) for ONE video."""
+    """Run main.py raw-extraction only (no preprocess) for ONE video."""
     vi_dir = repo_dir / "videoImplement"
     subprocess.run(
         [str(python_exe), "main.py", "--input", str(video_path), "--no_raw_plot", "--no_preprocess"],
->>>>>>> Stashed changes
         cwd=str(vi_dir),
         check=True,
     )
 
 
-<<<<<<< Updated upstream
-class Handler(FileSystemEventHandler):
-    def __init__(self, cfg):
-        self.cfg = cfg
-        self._busy = False
+def _run_process_single_trial(
+    python_exe: Path,
+    repo_dir: Path,
+    trial_dir: Path,
+    show_plots: bool,
+) -> None:
+    """Run process.py in single-trial mode against `trial_dir` (contains raw.csv)."""
+    vi_dir = repo_dir / "videoImplement"
+    env = os.environ.copy()
+    # Force an interactive backend (your earlier issue). If your matplotlib already
+    # works, this is harmless; if it doesn't, this is often the fix.
+    env.setdefault("MPLBACKEND", "MacOSX")
 
-    def _maybe_process(self, path: Path):
-        if self._busy:
-            return
-        if path.suffix.lower() not in VIDEO_EXTS:
-            return
+    cmd = [
+        str(python_exe),
+        "process.py",
+        "--data",
+        str(trial_dir),
+        "--resolution",
+        "1920x1080",
+    ]
+    if not show_plots:
+        cmd.append("--no_show_plot")
 
-        self._busy = True
-        try:
-            print(f"[watch] detected: {path}")
-            ok = wait_until_stable(path)
-            if not ok:
-                print(f"[watch] file never stabilized, skipping: {path}")
-                return
-
-            # Optional: move into a 'processing' folder to avoid duplicate triggers
-            processing_dir = self.cfg.processing
-            processing_dir.mkdir(parents=True, exist_ok=True)
-            moved_path = processing_dir / path.name
-            try:
-                shutil.move(str(path), str(moved_path))
-                path = moved_path
-            except Exception:
-                # If move fails (e.g. permissions), just process in place
-                pass
-
-            print(f"[watch] running pipeline on: {path}")
-            run_pipeline(self.cfg.python, self.cfg.repo, path, self.cfg.out_root)
-            print(f"[watch] done: {path}")
-
-            # Archive
-            if self.cfg.archive is not None:
-                self.cfg.archive.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(path), str(self.cfg.archive / path.name))
-
-        except subprocess.CalledProcessError as e:
-            print(f"[watch] pipeline failed: {e}")
-        finally:
-            self._busy = False
-
-    def on_created(self, event):
-        if event.is_directory:
-            return
-        self._maybe_process(Path(event.src_path))
-
-    def on_moved(self, event):
-        if event.is_directory:
-            return
-        self._maybe_process(Path(event.dest_path))
+    subprocess.run(cmd, cwd=str(vi_dir), check=True, env=env)
 
 
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--inbox", required=True, help="Folder where videos arrive")
-    p.add_argument("--repo", required=True, help="Path to eyeSSEF-main repo")
-    p.add_argument("--python", default=None, help="Python executable (default: current)")
-    p.add_argument("--out-root", default="data", help="Output root under videoImplement (default: data)")
-    p.add_argument("--processing", default=None, help="Move incoming files here before processing")
-    p.add_argument("--archive", default=None, help="Move processed files here")
-    return p.parse_args()
+def _safe_unique_dir(parent: Path, name: str) -> Path:
+    """Return a unique subdir path under parent (avoid collisions)."""
+    cand = parent / name
+    if not cand.exists():
+        return cand
+    i = 2
+    while True:
+        cand2 = parent / f"{name}_{i}"
+        if not cand2.exists():
+            return cand2
+        i += 1
 
 
-def main():
-    args = parse_args()
+def _build_session_average_raw(trial_dirs: List[Path], out_average_dir: Path) -> Path:
+    """Create ONE averaged raw.csv (across all trials) into out_average_dir.
 
-    class Cfg:
+    Output folder layout:
+      out_average_dir/raw.csv
+
+    Averaging method (robust + simple):
+      - Align by frame_id.
+      - Truncate to the shortest trial (min max frame_id).
+      - Treat is_bad_data==True as missing (NaN) before averaging.
+      - Average diameter_mm ignoring NaNs.
+    """
+    if not trial_dirs:
+        raise ValueError("No trials available to average.")
+
+    out_average_dir.mkdir(parents=True, exist_ok=True)
+    raw_out = out_average_dir / "raw.csv"
+
+    # Load all raw.csv
+    dfs = []
+    max_frames = []
+    for td in trial_dirs:
+        raw_csv = td / "raw.csv"
+        if not raw_csv.exists():
+            raise FileNotFoundError(f"Missing raw.csv in trial: {td}")
+        df = pd.read_csv(raw_csv)
+        if "frame_id" not in df.columns:
+            df = df.reset_index().rename(columns={"index": "frame_id"})
+        if "is_bad_data" not in df.columns:
+            df["is_bad_data"] = False
+        if "diameter_mm" not in df.columns:
+            raise ValueError(f"raw.csv missing diameter_mm: {raw_csv}")
+
+        df = df.sort_values("frame_id").reset_index(drop=True)
+        max_frames.append(int(df["frame_id"].max()))
+        dfs.append(df)
+
+    # Use common frame range [0..min_max]
+    min_max_frame = int(min(max_frames))
+    frame_ids = np.arange(0, min_max_frame + 1, dtype=int)
+
+    # Use timestamps from the first trial if possible
+    df0 = dfs[0].set_index("frame_id").reindex(frame_ids)
+    timestamps = df0["timestamp"].to_numpy() if "timestamp" in df0.columns else frame_ids.astype(float)
+
+    # Estimate px_to_mm (pixels per mm) so the session-average raw.csv can include
+    # a non-NaN 'diameter' (pixels) column. This is IMPORTANT because Pass 6
+    # (Savitzky–Golay smoothing) builds a NaN mask using BOTH diameter and
+    # diameter_mm; if diameter is all-NaN, it will wipe diameter_mm too.
+    px_to_mm_est = 30.0  # fallback (matches settings.py anchor for 1920x1080)
+    try:
+        if 'diameter' in dfs[0].columns and 'diameter_mm' in dfs[0].columns:
+            r = pd.to_numeric(dfs[0]['diameter'], errors='coerce') / pd.to_numeric(dfs[0]['diameter_mm'], errors='coerce')
+            r = r.replace([np.inf, -np.inf], np.nan).dropna()
+            if not r.empty:
+                v = float(r.median())
+                if np.isfinite(v) and v > 0:
+                    px_to_mm_est = v
+    except Exception:
         pass
 
-    cfg = Cfg()
-    cfg.inbox = Path(args.inbox).expanduser().resolve()
-    cfg.repo = Path(args.repo).expanduser().resolve()
-    cfg.out_root = Path(args.out_root)
-    cfg.python = Path(args.python).expanduser().resolve() if args.python else Path(os.sys.executable)
-    cfg.processing = Path(args.processing).expanduser().resolve() if args.processing else (cfg.inbox / "_processing")
-    cfg.archive = Path(args.archive).expanduser().resolve() if args.archive else (cfg.inbox / "_archive")
+    # Stack diameter_mm
+    mm_stack = []
+    conf_stack = []
+    for df in dfs:
+        dfi = df.set_index("frame_id").reindex(frame_ids)
+        mm = dfi["diameter_mm"].astype(float)
+        bad = dfi["is_bad_data"].astype(bool)
+        mm = mm.mask(bad)
+        mm_stack.append(mm.to_numpy())
 
-    if not cfg.inbox.exists():
-        raise FileNotFoundError(f"Inbox folder does not exist: {cfg.inbox}")
+        if "confidence" in dfi.columns:
+            conf = dfi["confidence"].astype(float)
+            conf = conf.mask(bad)
+            conf_stack.append(conf.to_numpy())
 
-    print(f"[watch] inbox: {cfg.inbox}")
-    print(f"[watch] repo:  {cfg.repo}")
+    mm_stack = np.vstack(mm_stack)  # (n_trials, n_frames)
+    mean_mm = np.nanmean(mm_stack, axis=0)
+    # If all trials are NaN for a frame, nanmean -> NaN
+    is_bad = np.isnan(mean_mm)
 
-    event_handler = Handler(cfg)
-    observer = Observer()
-    observer.schedule(event_handler, str(cfg.inbox), recursive=False)
-    observer.start()
+    # Provide a pixel-domain average too (required by Pass 6 NaN mask).
+    mean_px = mean_mm * float(px_to_mm_est)
 
-=======
-def _run_process_single_trial_show_plots(python_exe: Path, repo_dir: Path, trial_dir: Path) -> None:
-    """Run process.py ONLY on one trial folder (contains raw.csv) and show plots."""
-    vi_dir = repo_dir / "videoImplement"
-    subprocess.run(
-        [str(python_exe), "process.py", "--data", str(trial_dir)],
-        cwd=str(vi_dir),
-        check=True,
-    )
-
-
-def run_inbox_pipeline(cfg: "Config", inbox_video: Path) -> None:
-    """End-to-end inbox workflow for ONE video.
-
-    Implements exactly what you described:
-    - take new video from inbox root
-    - run main.py (raw only)
-    - archive the video
-    - run process.py only for that trial (and show plots)
-    """
-    processing_dir = (cfg.inbox / "_processing")
-    processing_dir.mkdir(parents=True, exist_ok=True)
-
-    # Move into _processing immediately to avoid re-triggering while we work
-    processing_video = processing_dir / inbox_video.name
-    shutil.move(str(inbox_video), str(processing_video))
-
-    # 1) main.py raw extraction (only this file)
-    _run_main_raw_only(cfg.python, cfg.repo, processing_video)
-
-    # Determine the trial folder that main.py wrote into
-    vi_dir = cfg.repo / "videoImplement"
-    trial_dir = (vi_dir / "data" / processing_video.stem).resolve()
-    if not trial_dir.exists():
-        raise FileNotFoundError(f"Expected trial folder not found: {trial_dir}")
-
-    # 2) archive the video BEFORE running process.py (as requested)
-    if cfg.archive is not None:
-        cfg.archive.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(processing_video), str(cfg.archive / processing_video.name))
+    if conf_stack:
+        conf_stack = np.vstack(conf_stack)
+        mean_conf = np.nanmean(conf_stack, axis=0)
     else:
-        # If archive disabled, move back to inbox root to avoid leaving clutter in _processing
-        shutil.move(str(processing_video), str(cfg.inbox / processing_video.name))
+        mean_conf = np.full_like(mean_mm, fill_value=np.nan, dtype=float)
 
-    # 3) process.py only for THIS trial dir; show interactive plots
-    _run_process_single_trial_show_plots(cfg.python, cfg.repo, trial_dir)
+    # Create output raw.csv compatible with process.py
+    out_df = pd.DataFrame(
+        {
+            "frame_id": frame_ids,
+            "timestamp": timestamps,
+            "diameter": mean_px,  # averaged pixel diameter (needed for Pass 6 NaN mask)
+            "confidence": mean_conf,
+            "is_bad_data": is_bad,
+            "diameter_mm": mean_mm,
+        }
+    )
+    out_df.to_csv(raw_out, index=False)
+    return out_average_dir
 
 
 @dataclass
 class Config:
     inbox: Path
-    archive: Optional[Path]
+    archive: Path
     repo: Path
     python: Path
-    poll_interval: float = 1.0
+    poll_interval: float = 0.5
 
 
-def iter_ready_videos(inbox: Path) -> Iterable[Path]:
-    """List candidate videos in inbox (excluding .part)."""
-    for p in sorted(inbox.iterdir()):
-        if not p.is_file():
-            continue
-        # only the inbox root; ignore reserved subfolders entirely
-        if p.parent != inbox:
-            continue
-        if p.suffix.lower() not in VIDEO_EXTS:
-            continue
-        if p.name.endswith(".part"):
-            continue
-        yield p
+@dataclass
+class Session:
+    root: Path
+    trial_root: Path
+    average_dir: Path
+    trials: List[Path]
+    seen_files: Set[str]
 
 
-def poll_loop(cfg: Config) -> None:
-    print(f"[watch] Polling mode. Watching: {cfg.inbox}")
-    busy = False
-    while True:
-        try:
-            if not busy:
-                for vid in iter_ready_videos(cfg.inbox):
-                    # only process if stable (upload completed + flushed)
-                    if not wait_until_stable(vid):
-                        continue
+def _create_new_session(repo_dir: Path) -> Session:
+    vi_dir = repo_dir / "videoImplement"
+    sessions_root = vi_dir / "sessions"
+    sessions_root.mkdir(parents=True, exist_ok=True)
 
-                    busy = True
-                    try:
-                        print(f"[watch] running pipeline on: {vid.name}")
-                        run_inbox_pipeline(cfg, vid)
-                        print(f"[watch] done: {vid.name}")
-                    except subprocess.CalledProcessError as e:
-                        print(f"[watch] pipeline failed ({vid.name}): {e}")
-                    finally:
-                        busy = False
-                    break
-            time.sleep(cfg.poll_interval)
-        except KeyboardInterrupt:
-            print("\n[watch] stopped.")
-            return
+    sid = datetime.now().strftime("session_%Y%m%d_%H%M%S")
+    session_root = sessions_root / sid
+    trial_root = session_root / "trial"
+    avg_dir = session_root / "average"
+
+    trial_root.mkdir(parents=True, exist_ok=True)
+    avg_dir.mkdir(parents=True, exist_ok=True)
+
+    return Session(root=session_root, trial_root=trial_root, average_dir=avg_dir, trials=[], seen_files=set())
 
 
-def watchdog_loop(cfg: Config) -> None:
-    """Filesystem-event watcher. Falls back to polling if watchdog is unavailable."""
-    try:
-        from watchdog.events import FileSystemEventHandler
-        from watchdog.observers import Observer
-    except Exception:
-        poll_loop(cfg)
+def _ingest_one_video(cfg: Config, session: Session, inbox_video: Path) -> None:
+    """Run main.py -> move raw folder into session/trial/<stem> -> archive video."""
+    processing_dir = cfg.inbox / "_processing"
+    processing_dir.mkdir(parents=True, exist_ok=True)
+
+    # Move into _processing to avoid repeated detection
+    processing_video = processing_dir / inbox_video.name
+    shutil.move(str(inbox_video), str(processing_video))
+
+    # Raw extraction
+    _run_main_raw_only(cfg.python, cfg.repo, processing_video)
+
+    # main.py writes trial folder to videoImplement/data/<stem>
+    vi_dir = cfg.repo / "videoImplement"
+    data_root = vi_dir / "data"
+    data_root.mkdir(parents=True, exist_ok=True)
+    produced_trial = (data_root / processing_video.stem).resolve()
+    if not produced_trial.exists():
+        raise FileNotFoundError(f"Expected trial folder not found: {produced_trial}")
+
+    # Move trial folder into this session's trial/ folder
+    dest_trial = _safe_unique_dir(session.trial_root, processing_video.stem)
+    shutil.move(str(produced_trial), str(dest_trial))
+    session.trials.append(dest_trial)
+
+    # Archive the video
+    cfg.archive.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(processing_video), str(cfg.archive / processing_video.name))
+
+
+def _process_session(cfg: Config, session: Session) -> None:
+    """Process all trials + create ONE average + process it (with interactive plots)."""
+    if not session.trials:
+        print("[session] No trials captured; nothing to process.")
         return
 
-    class Handler(FileSystemEventHandler):
-        def __init__(self) -> None:
-            super().__init__()
-            self.busy = False
-            self.seen: Set[str] = set()
+    print(f"[session] Processing {len(session.trials)} trial(s)...")
+    # 1) Per-trial processing (NO interactive windows)
+    for td in session.trials:
+        print(f"[trial] process.py (no windows): {td.name}")
+        _run_process_single_trial(cfg.python, cfg.repo, td, show_plots=False)
 
-        def on_created(self, event):
-            self._maybe_handle(event)
+    # 2) Build ONE average raw.csv
+    # Clear average dir so it contains only one result (as you want)
+    if session.average_dir.exists():
+        for child in session.average_dir.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink(missing_ok=True)
 
-        def on_moved(self, event):
-            self._maybe_handle(event)
+    _build_session_average_raw(session.trials, session.average_dir)
+    print(f"[average] Built averaged raw.csv from {len(session.trials)} trial(s).")
 
-        def _maybe_handle(self, event):
-            if event.is_directory:
-                return
-            p = Path(getattr(event, "dest_path", None) or event.src_path)
+    # 3) Process the average AND show interactive matplotlib plots
+    print("[average] process.py (WITH interactive windows). Close plots to finish.")
+    _run_process_single_trial(cfg.python, cfg.repo, session.average_dir, show_plots=True)
 
-            # Critical: only process files that are DIRECT children of the inbox root.
-            # When we move a file into _archive/ or _processing/, watchdog will emit a move event.
-            # Without this check, we'd re-trigger and loop on archived files.
-            try:
-                p = p.resolve()
-            except Exception:
-                pass
-            if p.parent != cfg.inbox:
-                return
-            if p.name in RESERVED_SUBDIRS or p.parts and any(part in RESERVED_SUBDIRS for part in p.parts):
-                return
+    print(f"[session] Done. Session folder: {session.root}")
 
-            if p.suffix.lower() not in VIDEO_EXTS:
-                return
-            if p.name.endswith(".part"):
-                return
-            if p.name in self.seen:
-                return
 
-            # do not re-enter
-            if self.busy:
-                return
-
-            # Wait for stability then run
-            self.busy = True
-            try:
-                print(f"[watch] detected: {p.name}")
-                ok = wait_until_stable(p)
-                if not ok:
-                    print(f"[watch] not stable / timeout: {p.name}")
-                    return
-
-                print(f"[watch] running pipeline on: {p.name}")
-                run_inbox_pipeline(cfg, p)
-                print(f"[watch] done: {p.name}")
-
-                # Mark as processed (use filename key; the file itself may be moved)
-                self.seen.add(p.name)
-            except subprocess.CalledProcessError as e:
-                print(f"[watch] pipeline failed ({p.name}): {e}")
-            finally:
-                self.busy = False
-
-    print(f"[watch] watchdog mode. Watching: {cfg.inbox}")
-    event_handler = Handler()
-    observer = Observer()
-    observer.schedule(event_handler, str(cfg.inbox), recursive=False)
-    observer.start()
->>>>>>> Stashed changes
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-<<<<<<< Updated upstream
-        observer.stop()
-    observer.join()
-=======
-        print("\n[watch] stopped.")
-    finally:
-        observer.stop()
-        observer.join()
+def _print_help() -> None:
+    print("\nCommands:")
+    print("  status   - show how many trials have been captured this session")
+    print("  process  - process all trials + one session average, then exit")
+    print("  quit     - exit without processing")
+    print("  help     - show this help\n")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--inbox", default=os.path.expanduser("~/plr_inbox"),
-                        help="Mac folder where Pi uploads videos (default: ~/plr_inbox)")
-    parser.add_argument("--archive", default=os.path.expanduser("~/plr_inbox/_archive"),
-                        help="Where to move processed videos. Set to '' to disable.")
-    parser.add_argument("--repo", default=str(Path(__file__).resolve().parent),
-                        help="Path to the EyeSSEF repo root (default: this script's folder).")
-    parser.add_argument("--python", default=sys.executable,
-                        help="Python executable to run the pipeline (default: current python).")
-    parser.add_argument("--mode", choices=["watchdog", "poll"], default="watchdog",
-                        help="watchdog uses filesystem events if installed; poll uses periodic scanning.")
-    parser.add_argument("--poll_interval", type=float, default=1.0,
-                        help="Polling interval (seconds) when --mode poll or watchdog not installed.")
+    parser.add_argument(
+        "--inbox",
+        default=os.path.expanduser("~/plr_inbox"),
+        help="Mac folder where Pi uploads videos (default: ~/plr_inbox)",
+    )
+    parser.add_argument(
+        "--archive",
+        default=os.path.expanduser("~/plr_inbox/_archive"),
+        help="Where to move source videos after main.py (default: ~/plr_inbox/_archive)",
+    )
+    parser.add_argument(
+        "--repo",
+        default=str(Path(__file__).resolve().parent),
+        help="Path to the EyeSSEF repo root (default: this script's folder)",
+    )
+    parser.add_argument(
+        "--python",
+        default=sys.executable,
+        help="Python executable to run the pipeline (default: current python)",
+    )
+    parser.add_argument(
+        "--poll_interval",
+        type=float,
+        default=0.5,
+        help="Polling interval in seconds (default 0.5)",
+    )
     args = parser.parse_args()
 
     inbox = Path(args.inbox).expanduser().resolve()
+    archive = Path(args.archive).expanduser().resolve()
     repo = Path(args.repo).expanduser().resolve()
     py = Path(args.python).expanduser().resolve()
 
-    if args.archive == "":
-        archive = None
-    else:
-        archive = Path(args.archive).expanduser().resolve()
-
     if not inbox.exists():
         raise FileNotFoundError(f"Inbox folder not found: {inbox}")
+    archive.mkdir(parents=True, exist_ok=True)
 
     cfg = Config(inbox=inbox, archive=archive, repo=repo, python=py, poll_interval=args.poll_interval)
+    session = _create_new_session(repo)
 
-    if args.mode == "poll":
-        poll_loop(cfg)
-    else:
-        watchdog_loop(cfg)
->>>>>>> Stashed changes
+    print(f"[session] Started: {session.root}")
+    print(f"[watch] Inbox: {cfg.inbox}")
+    print("[watch] This session will only run main.py on incoming videos.")
+    print("[watch] Type `process` to process ALL trials + ONE average, then exit.")
+    _print_help()
+
+    while True:
+        # 1) Poll for new candidate videos in the inbox root
+        for p in sorted(cfg.inbox.iterdir()):
+            if not _is_candidate_video(p, cfg.inbox):
+                continue
+            if p.name in session.seen_files:
+                continue
+
+            # Avoid racing with uploads: wait until stable
+            if not wait_until_stable(p):
+                continue
+
+            print(f"[watch] New video: {p.name}")
+            try:
+                _ingest_one_video(cfg, session, p)
+                session.seen_files.add(p.name)
+                print(f"[watch] main.py done -> trials captured: {len(session.trials)}")
+            except subprocess.CalledProcessError as e:
+                print(f"[watch] ERROR: main.py failed for {p.name}: {e}")
+            except Exception as e:
+                print(f"[watch] ERROR: failed ingest for {p.name}: {e}")
+
+            # Process only one per loop iteration to keep UI responsive
+            break
+
+        # 2) Non-blocking command input
+        try:
+            rlist, _, _ = select.select([sys.stdin], [], [], cfg.poll_interval)
+        except Exception:
+            # If select isn't available, just sleep
+            time.sleep(cfg.poll_interval)
+            continue
+
+        if rlist:
+            cmd = sys.stdin.readline().strip().lower()
+            if not cmd:
+                continue
+
+            if cmd in {"help", "h", "?"}:
+                _print_help()
+            elif cmd == "status":
+                print(f"[session] trials captured: {len(session.trials)}")
+                if session.trials:
+                    print("[session] trial names:")
+                    for td in session.trials:
+                        print(f"  - {td.name}")
+            elif cmd == "process":
+                _process_session(cfg, session)
+                print("[session] Exiting (start a new session by running watch_inbox.py again).")
+                return
+            elif cmd in {"quit", "exit", "q"}:
+                print("[watch] Exiting without processing.")
+                return
+            else:
+                print(f"[watch] Unknown command: {cmd}")
+                print("Type `help` for commands.")
 
 
 if __name__ == "__main__":

@@ -1,29 +1,46 @@
-# load a pupil csv data and then test them with the preprocessing scripts
+"""Preprocessing runner (Pass 1 -> Pass 6) with batch support.
+
+Key features (requested):
+1) FPS- & resolution-adaptive thresholds: fps and resolution are provided once (or inferred from folder name).
+2) Restored interactive plot window by default (like the older version).
+3) Quality reporting:
+   - % frames flagged after each pass and overall
+   - % frames interpolated in Pass 4
+   - warning if flagged or interpolated > 25%
+4) Batch grouping by naming convention:
+   PLR_[Username]_[EyeSide L/R]_[Resolution]_[FPS]_[TrialIndex]
+   Example: PLR_Patrick_R_1920x1080_30_2
+
+If --data points to a single trial directory (contains raw.csv), we process that one.
+If --data points to a parent directory containing many PLR_* trial directories, we:
+- group trials by (Username, Eye, Resolution, FPS)
+- take the latest 2 trials by TrialIndex (if available)
+- process each trial (Pass 1-4)
+- average the two graphs (Pass 5) only if both are fully filled (no NaNs)
+- smooth the averaged graph (Pass 6)
+- save a single averaged output folder per group
+"""
+
+from __future__ import annotations
+
+import argparse
 import os
+import re
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
 import pandas as pd
-from main import confidenceThresh, pxToMm
-from scripts.preProcessing.secondPass import removeSusBio
-from scripts.preProcessing.thirdPass import madFilter
-#from scripts.preProcessing.fourthPass import interpolateData
-#from scripts.preProcessing.fourthPassNoBoundaryCheck import interpolateData
-from scripts.preProcessing.fourthPassCubicOnly import interpolateData
-from scripts.preProcessing.fifthPass import averagePLRGraphs   
-from scripts.preProcessing.firstPass import confidenceFilter
-from scripts.preProcessing.sixthPass import savgolSmoothing
+
 from scripts.others.util import dprint
 import scripts.others.graph as graph
 
-# load sample data
-dprint("Loading sample pupil data for testing preprocessing scripts")
-df1Path = "../videoImplement/data/PLR_Tuna_R_1920x1080_30_3"
-#df2Path = "../videoImplement/data/PLR_Tuna_R_1280x720_60_2/firstPass.csv"
-df1 = pd.read_csv(df1Path + "/raw.csv")
-#df2 = pd.read_csv(df2Path)
+from settings import (
+    ProcessingConfig,
+    parse_resolution,
+    px_to_mm_from_resolution,
+    infer_fps_from_timestamps,
+)
 
-<<<<<<< Updated upstream
-dprint("Initial data loaded:")
-dprint(df1.head())
-=======
 from scripts.preProcessing.firstPass import confidenceFilter
 from scripts.preProcessing.secondPass import removeSusBio
 from scripts.preProcessing.thirdPass import madFilter
@@ -32,87 +49,157 @@ from scripts.preProcessing.fifthPass import averagePLRGraphs
 from scripts.preProcessing.sixthPass import savgolSmoothing
 from scripts.validation.validity import run_validity_report
 
->>>>>>> Stashed changes
 
-fps = 30
 
-def doProcessing(df, fps=30, saveBeforeInterpolation=False, savePathBeforeInterpolation=df1Path + "/beforeInterpolation.csv"):
-    # first pass
-    df = confidenceFilter(df)
-    dprint("After first pass (confidenceFilter):")
-    dprint(df.head())
+TRIAL_RE = re.compile(
+    r"^PLR_(?P<user>.+)_(?P<eye>[LR])_(?P<res>\d+x\d+)_(?P<fps>\d+)_(?P<trial>\d+)$"
+)
 
-    # second pass
-    df = removeSusBio(df, fps)
-    dprint("After second pass (removeSusBio):")
-    dprint(df.head())
 
-    # third pass
+@dataclass(frozen=True)
+class TrialMeta:
+    user: str
+    eye: str
+    res: str
+    fps: int
+    trial: int
+    dirname: str
+
+
+def _parse_trial_dirname(dirname: str) -> Optional[TrialMeta]:
+    m = TRIAL_RE.match(dirname)
+    if not m:
+        return None
+    return TrialMeta(
+        user=m.group("user"),
+        eye=m.group("eye"),
+        res=m.group("res"),
+        fps=int(m.group("fps")),
+        trial=int(m.group("trial")),
+        dirname=dirname,
+    )
+
+
+def _ensure_flag_column(df: pd.DataFrame) -> pd.DataFrame:
+    if "is_bad_data" not in df.columns:
+        df["is_bad_data"] = False
+    return df
+
+
+def _flagged_mask(df: pd.DataFrame) -> pd.Series:
+    """Frames considered 'flagged' (removed/unreliable).
+
+    We treat a frame as flagged if:
+    - is_bad_data == True (explicitly marked by passes), OR
+    - diameter_mm is NaN (missing measurement)
+    """
+    mask = pd.Series(False, index=df.index)
+    if "is_bad_data" in df.columns:
+        mask |= df["is_bad_data"].astype(bool)
+    if "diameter_mm" in df.columns:
+        mask |= df["diameter_mm"].isna()
+    return mask
+
+
+def _pct(x: int, total: int) -> float:
+    return (100.0 * x / total) if total > 0 else 0.0
+
+
+def _report_stage(stage: str, df: pd.DataFrame, prev_flagged: Optional[pd.Series]) -> pd.Series:
+    total = len(df)
+    cur_flagged = _flagged_mask(df)
+    cur_cnt = int(cur_flagged.sum())
+    if prev_flagged is None:
+        new_cnt = cur_cnt
+    else:
+        new_cnt = int((cur_flagged & ~prev_flagged).sum())
+
+    dprint(
+        f"{stage}: flagged {cur_cnt}/{total} "
+        f"({ _pct(cur_cnt, total):.1f}%), newly flagged in this pass: {new_cnt} "
+        f"({ _pct(new_cnt, total):.1f}%)"
+    )
+    return cur_flagged
+
+
+def _quality_summary(total_frames: int, flagged_total: int, interpolated: int) -> None:
+    flagged_pct = _pct(flagged_total, total_frames)
+    interp_pct = _pct(interpolated, total_frames)
+
+    dprint(f"Quality summary: flagged={flagged_total}/{total_frames} ({flagged_pct:.1f}%), "
+           f"interpolated={interpolated}/{total_frames} ({interp_pct:.1f}%).")
+
+    if flagged_pct > 25.0 or interp_pct > 25.0:
+        dprint("WARNING: Data quality is likely poor (>25% flagged or interpolated). "
+               "Consider re-recording (better alignment/lighting) or using 1080p if available.")
+    else:
+        dprint("OK: Data quality appears usable (<=25% flagged and interpolated).")
+
+
+def _load_raw_csv(trial_dir: str) -> pd.DataFrame:
+    raw_csv = os.path.join(trial_dir, "raw.csv")
+    if not os.path.exists(raw_csv):
+        raise FileNotFoundError(f"Could not find raw.csv in: {trial_dir}")
+    df = pd.read_csv(raw_csv)
+    return _ensure_flag_column(df)
+
+
+def run_passes_1_to_4(
+    df: pd.DataFrame,
+    config: ProcessingConfig,
+) -> Tuple[pd.DataFrame, Dict[str, int], pd.Series]:
+    """Run Pass 1-4 and return:
+    - DataFrame after interpolation (Pass 4)
+    - counts dict: {'total':..., 'interpolated':..., 'flagged_after_pass4':...}
+    - flagged mask after pass4 (for downstream comparisons)
+    """
+    total = len(df)
+    prev_flagged: Optional[pd.Series] = None
+
+    prev_flagged = _report_stage("Raw (before Pass 1)", df, prev_flagged)
+
+    # Pass 1
+    df = confidenceFilter(df, confidence_thresh=config.confidence_thresh)
+    prev_flagged = _report_stage("Pass 1 (confidence filter)", df, prev_flagged)
+
+    # Pass 2
+    df = removeSusBio(df, fps=config.fps)
+    prev_flagged = _report_stage("Pass 2 (biology/blink checks)", df, prev_flagged)
+
+    # Pass 3
     df = madFilter(df)
-    dprint("After third pass (madFilter):")
-    dprint(df.head())
+    prev_flagged = _report_stage("Pass 3 (MAD outlier filter)", df, prev_flagged)
 
-    # save before interpolation if needed
-    if saveBeforeInterpolation:
-        dfNoInterpolation = df.copy()
-        df.to_csv(savePathBeforeInterpolation, index=False)
-        dprint(f"Data before interpolation saved to '{savePathBeforeInterpolation}'")
+    # Pass 4 (Interpolation)
+    pre_nan = df["diameter_mm"].isna()
+    df = interpolateData(df, fps=config.fps, max_gap_ms=config.max_gap_ms)
+    post_nan = df["diameter_mm"].isna()
+    interpolated_mask = pre_nan & ~post_nan
+    interpolated_cnt = int(interpolated_mask.sum())
 
-        # percentage of NaNs before interpolation
-        totalPoints = len(dfNoInterpolation)
-        badPoints = dfNoInterpolation['is_bad_data'].sum()
-        badPercentage = (badPoints / totalPoints) * 100.0
-        
+    prev_flagged = _report_stage("Pass 4 (linear interpolation)", df, prev_flagged)
 
-    # fourth pass
-    #df = interpolateData(df, fps)
-    df = interpolateData(df)
-    dprint("After fourth pass (interpolateData):")
-    dprint(df.head())
+    flagged_after = int(_flagged_mask(df).sum())
 
-
-    # fifth pass
-    # skipping averagePLRGraphs here as we only have one dataset
-
-    # sixth pass
-    df = savgolSmoothing(df, fps=fps)
-    dprint("After sixth pass (savgolSmoothing):")
-    dprint(df.head())
-
-    if saveBeforeInterpolation: 
-        return df, dfNoInterpolation, totalPoints, badPoints, badPercentage
-    else: 
-        return df
+    counts = {
+        "total": total,
+        "interpolated": interpolated_cnt,
+        "flagged_after_pass4": flagged_after,
+    }
+    return df, counts, prev_flagged
 
 
-<<<<<<< Updated upstream
-dprint("Processing first dataset")
-df1_processed = doProcessing(df1, fps=fps)
-# get stats before interpolation
-#df1_processed, df1_beforeInterpolation, totalPoints, badPoints, badPercentage = doProcessing(df1, fps=60, saveBeforeInterpolation=True, savePathBeforeInterpolation=df1Path + "/beforeInterpolation.csv")
-#dprint(f"Before interpolation - Total data points: {totalPoints}, Bad data points: {badPoints}, Bad percentage: {badPercentage:.2f}%")
+def run_pass_6(
+    df: pd.DataFrame,
+    config: ProcessingConfig,
+) -> Tuple[pd.DataFrame, pd.Series]:
+    """Run Pass 6 and report flagged stats (should not change much)."""
+    prev_flagged = _flagged_mask(df)
+    df = savgolSmoothing(df, fps=config.fps, target_window_ms=config.savgol_window_ms)
+    prev_flagged = _report_stage("Pass 6 (Savitzky–Golay smoothing)", df, prev_flagged)
+    return df, prev_flagged
 
-# save to csv
-csvPreprocessedPath = "data/" + os.path.basename(df1Path).split('.')[0] + "/processed.csv"
-df1_processed.to_csv(csvPreprocessedPath, index=False)
-dprint(f"Processed data saved to CSV at '{csvPreprocessedPath}'")
 
-# plotting results
-dataFolderPath = "data/" + os.path.basename(df1Path).split('.')[0]
-graph.plotResults(df1_processed, savePath=dataFolderPath + "/processedPlot.png", showPlot=True, showMm=True)
-
-# plot non interpolated data for comparison
-#dataFolderPath = "data/" + os.path.basename(df1Path).split('.')[0]
-#graph.plotResults(df1_beforeInterpolation, savePath=dataFolderPath + "/beforeInterpolationPlot.png", showPlot=True, showMm=True)
-#dprint("Processing second dataset")
-#df2_processed = doProcessing(df2, fps=30)
-
-# averaging
-#dprint("Averaging the two processed datasets")
-#averaged_df = averagePLRGraphs(df1_processed, df2_processed)
-#dprint("After fifth pass (averagePLRGraphs):")
-#dprint(averaged_df.head())
-=======
 def process_single_trial(
     trial_dir: str,
     config: ProcessingConfig,
@@ -463,4 +550,3 @@ def main():
 
 if __name__ == "__main__":
     main()
->>>>>>> Stashed changes

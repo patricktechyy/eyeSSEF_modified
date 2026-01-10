@@ -36,62 +36,85 @@ def rollingAverage(dataframe):
 """
 
 
-def savgolSmoothing(dataframe, fps=60): 
+def savgolSmoothing(dataframe, fps=None, target_window_ms=150):
+    """Pass 6: Savitzky–Golay smoothing.
 
+    Why fps matters:
+    - The smoothing window is defined in milliseconds (target_window_ms).
+    - We convert that into a number of frames: window_frames ≈ target_window_ms / (1000/fps).
+
+    If fps is not provided, we try to infer it from the timestamp column.
+    """
     n_points = len(dataframe)
-    diameters = dataframe['diameter'].values.copy()
-    diameters_mm = dataframe['diameter_mm'].values.copy()
 
-    #handle nan bc savgol cant (safety feature, all nan shld alr be taken care of during the 4th pass)
+    # Infer fps if user did not provide it
+    if fps is None:
+        try:
+            from videoImplement.settings import infer_fps_from_timestamps  # when run from project root
+        except Exception:
+            try:
+                from settings import infer_fps_from_timestamps  # when run inside videoImplement
+            except Exception:
+                infer_fps_from_timestamps = lambda ts: None
+
+        inferred = infer_fps_from_timestamps(dataframe.get('timestamp', []))
+        if inferred is None:
+            # Last-resort fallback (should rarely be needed)
+            fps = 60.0
+            dprint("Pass 6: fps not provided and could not be inferred; falling back to 60 fps")
+        else:
+            fps = float(round(inferred))
+            dprint(f"Pass 6: inferred fps ≈ {fps}")
+
+    fps = float(fps)
+
+    diameters = dataframe['diameter'].astype(float).values.copy()
+    diameters_mm = dataframe['diameter_mm'].astype(float).values.copy()
+
+    # SavGol cannot handle NaNs -> temporarily interpolate for smoothing,
+    # then restore original NaN locations afterwards.
+    nan_mask = np.isnan(diameters) | np.isnan(diameters_mm)
+
     if np.any(np.isnan(diameters)):
-        diameters = pd.Series(diameters).interpolate(method = 'linear', limit_direction = 'both').values
+        diameters = pd.Series(diameters).interpolate(method='linear', limit_direction='both').values
     if np.any(np.isnan(diameters_mm)):
-        diameters_mm = pd.Series(diameters_mm).interpolate(method = 'linear', limit_direction = 'both').values
+        diameters_mm = pd.Series(diameters_mm).interpolate(method='linear', limit_direction='both').values
 
-    #calc signal properties
-    signal_std = np.std(diameters_mm)
-    signal_range = np.max(diameters_mm) - np.min(diameters_mm)
+    # Signal properties
+    signal_std = float(np.std(diameters_mm))
 
-    #adaptive window size based on fps and signal properties
-    target_window_ms = 150 
-    window_frames = int(target_window_ms / (1000 / fps))
-
-    #window size must be odd
+    # Window in frames (must be odd and >= 5)
+    window_frames = int(target_window_ms / (1000.0 / fps))
+    window_frames = max(5, window_frames)
     if window_frames % 2 == 0:
         window_frames += 1
 
-    #adjust based on signal quality
-    if signal_std > 0.5: #noisy bad
-        window_frames = min(window_frames + 2, 11) #larger window -> more smoothing
-        polyorder = 2 #lower order (2 = quadratic) to prevent overfitting bad data
-        dprint(f"Noisy signal, using window = {window_frames}, polyorder/power of the curve = {polyorder}")
-    else: #clean signal good
-        window_frames = max(5, window_frames) #smaller window -> better preserve peaks and troughs
-        polyorder = 3 #cubic
-        dprint(f"Clean signal, using window = {window_frames}, polyorder/power of the curve = {polyorder}")
+    # Adaptive tweak based on noise
+    if signal_std > 0.5:
+        window_frames = min(window_frames + 2, 11)
+        polyorder = 2
+        dprint(f"Pass 6: noisy signal (std={signal_std:.3f}), window={window_frames}, polyorder={polyorder}")
+    else:
+        window_frames = max(5, window_frames)
+        polyorder = 3
+        dprint(f"Pass 6: clean signal (std={signal_std:.3f}), window={window_frames}, polyorder={polyorder}")
 
     if window_frames > n_points:
         window_frames = n_points if n_points % 2 == 1 else n_points - 1
-        window_frames = max(3, window_frames)
-
-    if window_frames < 5:
-        window_frames = 5
+        window_frames = max(5, window_frames)
 
     if polyorder >= window_frames:
         polyorder = window_frames - 1
 
-    dprint(f"Adaptive parameters: window = {window_frames}, polyorder = {polyorder}")
+    # Apply smoothing
+    smoothed = savgol_filter(diameters, window_length=window_frames, polyorder=polyorder, mode='interp')
+    smoothed_mm = savgol_filter(diameters_mm, window_length=window_frames, polyorder=polyorder, mode='interp')
 
-    #apply smoothing using the library
-    smoothed = savgol_filter(diameters, window_length = window_frames, polyorder = polyorder, mode = 'interp')
-    smoothed_mm = savgol_filter(diameters_mm, window_length = window_frames, polyorder = polyorder, mode = 'interp')
-
-    nan_mask = np.isnan(diameters)
+    # Restore NaNs where original data was missing
     smoothed[nan_mask] = np.nan
     smoothed_mm[nan_mask] = np.nan
 
     dataframe['diameter'] = smoothed
     dataframe['diameter_mm'] = smoothed_mm
-
     return dataframe
-    
+

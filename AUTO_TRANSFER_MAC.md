@@ -3,7 +3,7 @@
 This repo includes the same two-part automation as `eyeSSEF_modified-main`:
 
 1) **Pi autosend**: `plr_autosend.sh` watches the Pi recording folder and pushes new videos to your Mac inbox.
-2) **Mac watcher**: `watch_inbox.py` watches the inbox and runs the EyeSSEF pipeline automatically.
+2) **Mac watcher**: `watch_inbox.py` watches the inbox and runs the EyeSSEF pipeline in **session mode**.
 
 ---
 
@@ -33,7 +33,7 @@ chmod +x plr_autosend.sh
 
 ---
 
-## Part B — Mac (auto-processing)
+## Part B — Mac (session mode processing)
 
 ### 1) Create inbox folder
 ```bash
@@ -47,24 +47,36 @@ mkdir -p ~/plr_inbox/_archive
 python3 -m pip install -r requirements_inbox.txt
 ```
 
-> If you don’t want to install `watchdog`, you can run polling mode:
-> `python3 watch_inbox.py --mode poll`
+> `watch_inbox.py` uses a simple polling loop, so `watchdog` is optional.
 
 ### 3) Run the Mac watcher (from repo root)
 ```bash
 python3 watch_inbox.py --inbox ~/plr_inbox --repo .
 ```
 
-What happens:
+What happens in **session mode**:
 - Pi uploads `*.part` then renames to the final `*.mp4`
 - watcher ignores `.part`, waits until file size is stable
-- watcher then:
-  - **moves the video into `~/plr_inbox/_processing/`** (prevents repeated triggers)
-  - runs raw extraction only:
+- for every new video in the inbox root, watcher:
+  - moves the video into `~/plr_inbox/_processing/`
+  - runs **raw extraction only**:
     - `videoImplement/main.py --input <video> --no_raw_plot --no_preprocess`
-  - **archives the video into `~/plr_inbox/_archive/`**
-  - runs preprocessing for that one trial folder only (and shows plots):
-    - `videoImplement/process.py --data videoImplement/data/<stem>`
+  - archives the source video into `~/plr_inbox/_archive/`
+  - saves the raw trial folder into:
+    - `videoImplement/sessions/session_<timestamp>/trial/<video_stem>/`
+
+When you are done collecting videos for that session, type this **in the same Terminal**:
+
+```
+process
+```
+
+Then the watcher will:
+- run `videoImplement/process.py` on **every** trial folder in `trial/` (no plot windows)
+- create exactly **one** averaged signal across **all** trials in:
+  - `videoImplement/sessions/session_<timestamp>/average/raw.csv`
+- run `videoImplement/process.py` on `average/` and **show** the interactive matplotlib plots
+- exit (start a new session by running `watch_inbox.py` again)
 
 ---
 
@@ -83,7 +95,7 @@ ssh-copy-id <MAC_USER>@<MAC_HOST>
 - Clear the inbox (leave only new incoming videos), or
 - Put processed videos in `_archive` (default behaviour already)
 
-### It opens plot windows
-This is expected: `process.py` shows the interactive processed-curve plot by default.
-Close the plot window to let the watcher continue to the next incoming video.
+### It opens plot windows during `process`
+This is expected: the session-average `process.py` run opens interactive plot windows.
+Close the plot windows to let the script finish and exit.
 

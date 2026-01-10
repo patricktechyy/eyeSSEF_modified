@@ -1,11 +1,24 @@
+"""Pass 1: Confidence filter.
+
+Any frame with confidence < confidence_thresh is considered unreliable and is set to NaN.
+We also mark those frames with is_bad_data=True so later steps (and plotting) can hide them.
+"""
+
+import numpy as np
 from scripts.others.util import dprint
 
-confidenceThresh = 0.75  # threshold for confidence filtering
+DEFAULT_CONFIDENCE_THRESH = 0.75
 
-def confidenceFilter(df):
-    # set rows with confidence < 1 to NaN
-    dprint(f"Preprocessing data: setting diameters with confidence < {confidenceThresh} to NaN")
-    df.loc[df['confidence'] < confidenceThresh, 'diameter'] = float('nan')
-    # do the same for diameter_mm
-    df.loc[df['confidence'] < confidenceThresh, 'diameter_mm'] = float('nan')
+def confidenceFilter(df, confidence_thresh: float = DEFAULT_CONFIDENCE_THRESH):
+    dprint(f"Pass 1: setting diameters with confidence < {confidence_thresh} to NaN")
+
+    # Ensure the flag column exists
+    if 'is_bad_data' not in df.columns:
+        df['is_bad_data'] = False
+
+    bad = df['confidence'].astype(float) < float(confidence_thresh)
+    df.loc[bad, 'is_bad_data'] = True
+    df.loc[bad, 'diameter'] = np.nan
+    df.loc[bad, 'diameter_mm'] = np.nan
+
     return df
