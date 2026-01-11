@@ -1,14 +1,4 @@
-"""main.py
 
-Extract raw pupil diameter time-series from a recorded trial video.
-
-Outputs (per video):
-  videoImplement/data/<trial_stem>/raw.csv
-  videoImplement/data/<trial_stem>/rawPlot.png
-
-This file is intentionally named main.py because other scripts (e.g., watch_inbox.py)
-call it directly.
-"""
 
 from __future__ import annotations
 

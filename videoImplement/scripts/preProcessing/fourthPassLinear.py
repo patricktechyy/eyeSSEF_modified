@@ -89,20 +89,7 @@ def linear_interpolation(df: pd.DataFrame, fps=60, max_gap_ms=400): #max 500ms
     return df_interp
 
 def interpolateData(df: pd.DataFrame, fps: float, max_gap_ms: int = 400) -> pd.DataFrame:
-    """Pass 4: Linear interpolation to fill short gaps.
 
-    Why fps matters:
-    - We limit interpolation by *time* (max_gap_ms), not by number of frames.
-    - Therefore the allowed gap in frames depends on fps.
-
-    Args:
-        df: DataFrame containing 'diameter' and 'diameter_mm'
-        fps: frames per second (e.g., 30 or 60)
-        max_gap_ms: maximum gap duration to fill (default 400 ms)
-
-    Returns:
-        DataFrame with short NaN gaps filled.
-    """
     dprint(f"Pass 4: linear interpolation (max gap {max_gap_ms}ms, fps={fps})")
     df_interpolated = linear_interpolation(df, fps=float(fps), max_gap_ms=int(max_gap_ms))
     dprint("Pass 4: interpolation completed.")

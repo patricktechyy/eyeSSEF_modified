@@ -1,8 +1,4 @@
-"""Pass 1: Confidence filter.
 
-Any frame with confidence < confidence_thresh is considered unreliable and is set to NaN.
-We also mark those frames with is_bad_data=True so later steps (and plotting) can hide them.
-"""
 
 import numpy as np
 from scripts.others.util import dprint

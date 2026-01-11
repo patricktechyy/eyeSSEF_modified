@@ -1,24 +1,4 @@
-"""Pass 5: Average two PLR graphs (same eye, same recording settings).
 
-This pass combines TWO trials (same user, same eye, same resolution, same fps)
-into a single representative curve.
-
-Why averaging can fail if you only use "same length":
-- Two recordings often end a few frames earlier/later (operator stopped earlier, blink, dropped frame).
-- That makes df1 and df2 have different lengths even though they are the same fps.
-- A strict length check would refuse to average and can crash downstream code.
-
-What we do instead (robust approach):
-1) Prefer a direct index-wise average if timestamps are already identical.
-2) Otherwise, align by TIME:
-   - take the overlapping time interval between the two recordings
-   - create a common time grid (using the slower frame step)
-   - interpolate each signal onto that grid
-   - average point-by-point on the aligned grid
-
-We also propagate `is_bad_data` conservatively:
-- A point is marked bad in the averaged output if it was bad in EITHER trial.
-"""
 
 from __future__ import annotations
 

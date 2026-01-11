@@ -37,14 +37,7 @@ def rollingAverage(dataframe):
 
 
 def savgolSmoothing(dataframe, fps=None, target_window_ms=150):
-    """Pass 6: Savitzky–Golay smoothing.
 
-    Why fps matters:
-    - The smoothing window is defined in milliseconds (target_window_ms).
-    - We convert that into a number of frames: window_frames ≈ target_window_ms / (1000/fps).
-
-    If fps is not provided, we try to infer it from the timestamp column.
-    """
     n_points = len(dataframe)
 
     # Infer fps if user did not provide it

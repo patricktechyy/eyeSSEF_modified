@@ -1,15 +1,4 @@
-"""process.py
 
-Preprocess raw pupil diameter traces produced by main.py.
-
-Modes:
-1) Single-trial mode: --data points to a folder containing raw.csv.
-2) Batch mode: --data points to a parent folder containing multiple PLR_* trial folders.
-
-Outputs:
-- Per trial: processed_interpolated.csv, processed.csv, processedPlot.png
-- Per group (last 2 trials): PLR_<user>_<eye>_<res>_<fps>_AVG/processed_avg.csv + processedAvgPlot.png
-"""
 
 from __future__ import annotations
 

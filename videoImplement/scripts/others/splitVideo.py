@@ -5,16 +5,7 @@ import cv2
 import numpy as np
 
 def split_video_left_right(input_video_path, output_left_path, output_right_path, width_threshold=None):
-    """
-    Split a video into left and right halves and save as separate videos.
-    
-    Args:
-        input_video_path (str): Path to input video file
-        output_left_path (str): Path for left half output video
-        output_right_path (str): Path for right half output video
-        width_threshold (int, optional): If specified, splits at this pixel position.
-                                        If None, splits exactly in the middle.
-    """
+
     
     # Open the input video
     cap = cv2.VideoCapture(input_video_path)
@@ -80,16 +71,3 @@ def split_video_left_right(input_video_path, output_left_path, output_right_path
     #print(f"Processing complete! Created {frame_count} frames.")
     print(f"Left half saved to: {output_left_path}")
     print(f"Right half saved to: {output_right_path}")
-
-# Example usage
-#if __name__ == "__main__":
-    # Paths
-#   input_video = "input_video.mp4"  # Replace with your video path
-#    output_left = "left_half.mp4"
-#    output_right = "right_half.mp4"
-    
-    # Split the video (exactly in the middle)
-#    split_video_left_right(input_video, output_left, output_right)
-    
-    # Or split at a specific pixel position (e.g., 640px from left)
-    # split_video_left_right(input_video, output_left, output_right, width_threshold=640)
