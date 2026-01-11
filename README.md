@@ -59,8 +59,6 @@ Full setup steps for the automated workflow:
 - **docs/INSTALL.md** — install Python + dependencies (including PyPupilEXT)
 - **docs/USAGE.md** — how to run `main.py`, `process.py`, batch mode, and naming conventions
 - **docs/OUTPUTS.md** — what files are produced and how to interpret them
-- **docs/TROUBLESHOOTING.md** — common issues (PyPupilEXT wheels, OpenCV, matplotlib backends)
-
 ---
 
 ## Core scripts
