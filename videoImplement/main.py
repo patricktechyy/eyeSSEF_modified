@@ -1,216 +1,178 @@
-# TODO
-# add a counter for processing iterations?
-# set data as bad if confidence < threshold
-# set data as bad IF the difference in pupil diameter between any 2 frames is >0.5mm (applies for 60fps)
-# do cubic spline interpolation to fill in bad data points
+"""main.py
 
+Extract raw pupil diameter time-series from a recorded trial video.
 
+Outputs (per video):
+  videoImplement/data/<trial_stem>/raw.csv
+  videoImplement/data/<trial_stem>/rawPlot.png
 
-import os
-import cv2
-import shutil
-import datetime
+This file is intentionally named main.py because other scripts (e.g., watch_inbox.py)
+call it directly.
+"""
+
+from __future__ import annotations
+
 import argparse
+import os
 import re
+import shutil
 import subprocess
 import sys
-import scripts.others.splitVideo as splitVideo
+from typing import List, Optional, Tuple
+
+import cv2
+import pandas as pd
+
 import scripts.detection.ppDetect as ppDetect
 import scripts.others.graph as graph
 import scripts.others.util as util
-import matplotlib.pyplot as plt
-import pandas as pd
-from scipy.interpolate import CubicSpline
-
-#from scripts.preProcessing.firstPass import preProcessFirstPass
-# make sure later u save the detected images into a folder
-
-pathToVideo = "../eyeVids/tuna/PLR_Tuna_R_1920x1080_30_4.mp4"  # default fallback; CLI can override
-pathToLeft = "./videos/left_half.mp4"
-pathToRight = "./videos/right_half.mp4"
-confidenceThresh = 0.75
-
-# Video filename convention (stem, no extension):
-# PLR_[Username]_[EyeSide L/R]_[Resolution]_[FPS]_[TrialIndex]
-# Example: PLR_Patrick_R_1920x1080_30_2
-TRIAL_VIDEO_RE = re.compile(r"^PLR_(?P<user>.+)_(?P<eye>[LR])_(?P<res>\d+x\d+)_(?P<fps>\d+)_(?P<trial>\d+)$")
 
 
-processingIteration = 0
-pxToMm = 30.0  # pixels per mm at 1080p (baseline). Prefer using settings.ProcessingConfig.
+DEFAULT_VIDEO_PATH = "../eyeVids/tuna/PLR_Tuna_R_1920x1080_30_4.mp4"
+CONFIDENCE_THRESH = 0.75
 
-# --- Configuration helpers (fps & resolution) ---------------------------------
-# Many thresholds are time-based -> they depend on fps.
-# Pixel-to-mm conversion depends on resolution (and your optical setup).
-#
-# You can keep using the old globals (confidenceThresh, pxToMm),
-# but for new code we recommend using videoImplement/settings.py.
-try:
-    from settings import px_to_mm_from_resolution, parse_resolution
-except Exception:
-    px_to_mm_from_resolution = None
-    parse_resolution = None
-
-def configure_processing_params(frame_rate: float, width: int, height: int,
-                                fps_override=None,
-                                resolution_override=None,
-                                px_to_mm_override=None):
-    """Return (fps, width, height, px_to_mm) using user overrides if provided."""
-    fps = float(fps_override) if fps_override is not None else float(frame_rate)
-
-    if resolution_override and parse_resolution is not None:
-        w, h = parse_resolution(resolution_override)
-    else:
-        w, h = int(width), int(height)
-
-    if px_to_mm_override is not None:
-        px_to_mm = float(px_to_mm_override)
-    elif px_to_mm_from_resolution is not None:
-        px_to_mm = px_to_mm_from_resolution(w, h)
-    else:
-        px_to_mm = pxToMm  # fallback to legacy global
-
-    return fps, w, h, px_to_mm
+_BASE_RES = (1920, 1080)
+_BASE_PX_TO_MM = 30.0  # pixels per mm at 1920x1080, based on your earlier calibration
 
 
+# Expected video stem (no extension):
+#   PLR_<User>_<EyeSide L/R>_<Resolution>_<FPS>_<TrialIndex>
+# Example:
+#   PLR_Patrick_R_1920x1080_30_2
+TRIAL_VIDEO_RE = re.compile(
+    r"^PLR_(?P<user>.+)_(?P<eye>[LR])_(?P<res>\d+x\d+)_(?P<fps>\d+)_(?P<trial>\d+)$"
+)
 
 
-# print stuff with timestamp at the start cuz it looks nice
-# lmao
+def parse_resolution(res_str: str) -> Tuple[int, int]:
+    m = re.match(r"^\s*(\d+)\s*x\s*(\d+)\s*$", res_str)
+    if not m:
+        raise ValueError(f"Invalid resolution format: {res_str} (expected like 1920x1080)")
+    return int(m.group(1)), int(m.group(2))
 
 
-def splitEyes(video, left, right, widthThresh):
-    util.dprint(f"attemping to convert video file '{video} into left and right videos '{left}' and '{right}'")
-    # Paths
-    input_video = video  # path to video
-    output_left = left
-    output_right = right
+def px_to_mm_from_resolution(width: int, height: int) -> float:
+    """Estimate px/mm by scaling from the 1920x1080 calibration.
 
-    splitVideo.split_video_left_right(input_video, output_left, output_right, widthThresh)
-
+    This assumes the same camera + lens + working distance.
+    """
+    _, base_h = _BASE_RES
+    return _BASE_PX_TO_MM * (height / base_h)
 
 
-def resetFolder(folderName):
-    if os.path.exists(folderName):
-        util.dprint(f"folder '{folderName}' exists, removing contents in folder")
-        try:
-            shutil.rmtree(folderName)
-            util.dprint(f"Folder '{folderName}' and all its contents deleted successfully.")
-        except OSError as e:
-            util.dprint(f"Error: {e}. An error occurred during deletion.")
-        util.dprint(f"Making new '{folderName}'")
-        os.makedirs(folderName)
-    else: 
-        util.dprint(f"Folder '{folderName}' does not exist, making the folder")
-        try:
-            os.makedirs(folderName)
-        except OSError:
-            util.dprint(f"Error: Creating folder '{folderName}'")
-    return folderName
+def reset_folder(folder: str) -> str:
+    if os.path.exists(folder):
+        shutil.rmtree(folder)
+    os.makedirs(folder, exist_ok=True)
+    return folder
 
-# split the video into multiple image files
-def videoToImages(video, folderName):
-    folderName = str(folderName)
-    util.dprint(f"Trying to convert video '{video}' into frames and storing into '{folderName}'")
-    # 2. convert the video into multiple .bmp files and store it in the tempImages folder
-    cam = cv2.VideoCapture(video)
-    currentframe = 0
-    frameRate = cam.get(cv2.CAP_PROP_FPS)
-    print(f"Video frame rate: {frameRate} fps")
+
+def video_to_images(video_path: str, out_dir: str) -> Tuple[float, int]:
+    """Decode a video into BMP frames named frame0.bmp, frame1.bmp, ..."""
+    util.dprint(f"Decoding frames from: {video_path} -> {out_dir}")
+
+    cap = cv2.VideoCapture(video_path)
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+
+    frame_idx = 0
     while True:
-        ret,frame = cam.read()
-        if ret:
-            #name = './frames/' + folderName +'/frame' + str(currentframe) + '.bmp'
-            name = os.path.join(folderName, 'frame' + str(currentframe) + '.bmp')
-            util.dprint("Creating... " + name)
-
-            cv2.imwrite(name, frame)
-
-            currentframe += 1
-        else:
+        ret, frame = cap.read()
+        if not ret:
             break
+        out_path = os.path.join(out_dir, f"frame{frame_idx}.bmp")
+        cv2.imwrite(out_path, frame)
+        frame_idx += 1
 
-    cam.release()
-    cv2.destroyAllWindows()    
-    util.dprint("All frames done!")
-
-    return frameRate, currentframe
-
-    # 3. turn images ito grayscale (actually i think this is part of the algorithm but meh)
-    
-def pupilDetectionInFolder(folderPath):
-    util.dprint(f"Starting pupil detection in folder '{folderPath}'")
-    conf = []
-    diameter = []
-    for i in range(len(os.listdir(folderPath))):
-        filename = f"frame{i}.bmp"
-        newPath = os.path.join(folderPath, filename)
-        imgWithPupil, outline_confidence, pupil_diameter = ppDetect.detect(newPath)
-        
-        conf.append(outline_confidence)
-        diameter.append(pupil_diameter)
-        util.dprint(f"Showing image {newPath} with detected pupil...")
-        # show the images continuously using cv2 window
-        cv2.imshow("Pupil Detection for " + pathToVideo, imgWithPupil)
-        cv2.waitKey(1)  # Display each image for 1 ms
-
-        # closes window after all images are shown
+    cap.release()
     cv2.destroyAllWindows()
-    return conf, diameter
-
-def calculateTimeStamps(frameRate, totalFrames):
-    timePerFrame = 1.0 / frameRate
-    timestamps = [i * timePerFrame for i in range(totalFrames)]
-    return timestamps
+    util.dprint(f"Decoded {frame_idx} frames.")
+    return fps, frame_idx
 
 
-def getAverageOfColumn(dataframe, colName):
-    return dataframe[colName].mean()
+def _sorted_frame_paths(frames_dir: str) -> List[str]:
+    """Return frame paths sorted by the numeric index in 'frame<idx>.bmp'."""
+    frame_re = re.compile(r"^frame(\d+)\.bmp$", re.IGNORECASE)
+    items = []
+    for name in os.listdir(frames_dir):
+        m = frame_re.match(name)
+        if not m:
+            continue
+        items.append((int(m.group(1)), os.path.join(frames_dir, name)))
+    items.sort(key=lambda x: x[0])
+    return [p for _, p in items]
 
 
+def pupil_detection_in_folder(frames_dir: str, preview_title: str) -> Tuple[List[float], List[float]]:
+    util.dprint(f"Running pupil detection on frames in: {frames_dir}")
 
-def blinkDetection(image):
-    pass
+    confidences: List[float] = []
+    diameters_px: List[float] = []
 
-# save data to csv with Columns: 'frame_id', 'timestamp', 'diameter', 'diameter_mm', 'confidence', 'is_bad_data'
-def saveDataToCSV(frameIDs, timestamps, diameters, confidences, outputPath, px_to_mm=None):
-    data = {
-        'frame_id': frameIDs,
-        'timestamp': timestamps,
-        'diameter': diameters,
-        'confidence': confidences
-    }
-    df = pd.DataFrame(data)
-    # Mark bad data points (confidence < 1)
-    df['is_bad_data'] = df['confidence'] < confidenceThresh
-    df['diameter_mm'] = df['diameter'] / (px_to_mm if px_to_mm is not None else pxToMm)
-    df.to_csv(outputPath, index=False)
-    util.dprint(f"Data saved to CSV at '{outputPath}'")
-    
-    # return the pandas dataframe too if needed
+    frame_paths = _sorted_frame_paths(frames_dir)
+    for p in frame_paths:
+        img_with_pupil, outline_confidence, pupil_diameter = ppDetect.detect(p)
+        confidences.append(float(outline_confidence))
+        diameters_px.append(float(pupil_diameter))
+
+        # Preview window (useful for checking detection stability)
+        cv2.imshow(preview_title, img_with_pupil)
+        cv2.waitKey(1)
+
+    cv2.destroyAllWindows()
+    return confidences, diameters_px
+
+
+def calculate_timestamps(fps: float, total_frames: int) -> List[float]:
+    if fps <= 0:
+        raise ValueError("FPS must be > 0 to compute timestamps.")
+    dt = 1.0 / float(fps)
+    return [i * dt for i in range(total_frames)]
+
+
+def save_raw_csv(
+    frame_ids: List[int],
+    timestamps: List[float],
+    diameters_px: List[float],
+    confidences: List[float],
+    out_csv: str,
+    px_to_mm: float,
+) -> pd.DataFrame:
+    df = pd.DataFrame(
+        {
+            "frame_id": frame_ids,
+            "timestamp": timestamps,
+            "diameter": diameters_px,
+            "confidence": confidences,
+        }
+    )
+
+    df["is_bad_data"] = df["confidence"] < float(CONFIDENCE_THRESH)
+    df["diameter_mm"] = pd.to_numeric(df["diameter"], errors="coerce") / float(px_to_mm)
+
+    df.to_csv(out_csv, index=False)
+    util.dprint(f"Saved raw.csv: {out_csv}")
     return df
 
 
-
-
-def _get_video_props(video_path: str):
-    """Return (fps, width, height) from the video container using OpenCV."""
+def _get_video_props(video_path: str) -> Tuple[float, int, int]:
     cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     cap.release()
-    return float(fps), int(width), int(height)
+    return fps, width, height
 
 
-def _find_videos(input_path: str, recursive: bool = False):
-    """Find video files under input_path. Supported extensions: .mp4, .mov, .avi, .mkv, .h264"""
-    exts = {'.mp4', '.mov', '.avi', '.mkv', '.h264'}
-    videos = []
+def _find_videos(input_path: str, recursive: bool) -> List[str]:
+    exts = {".mp4", ".mov", ".avi", ".mkv", ".h264"}
+
     if os.path.isfile(input_path):
         return [input_path]
+
     if not os.path.isdir(input_path):
         return []
+
+    videos: List[str] = []
     if recursive:
         for root, _, files in os.walk(input_path):
             for f in files:
@@ -221,78 +183,108 @@ def _find_videos(input_path: str, recursive: bool = False):
             p = os.path.join(input_path, f)
             if os.path.isfile(p) and os.path.splitext(f)[1].lower() in exts:
                 videos.append(p)
+
     videos.sort()
     return videos
 
 
-def generateReport(video_path: str, show_raw_plot: bool = True):
-    """Run detection on one video -> writes raw.csv into videoImplement/data/<stem>/"""
-    util.dprint("Running standalone pupil detection implementation...")
-    resetFolder("videos")
-    resetFolder("frames")
+def generate_report(video_path: str, show_raw_plot: bool = True) -> str:
+    """Run detection on one video and write raw.csv to videoImplement/data/<stem>/"""
+    util.dprint(f"Processing video: {video_path}")
+
+    reset_folder("videos")
+    reset_folder("frames")
 
     stem = os.path.splitext(os.path.basename(video_path))[0]
 
-    # Try to parse fps/resolution from filename; fall back to video metadata
-    fps_override = None
-    res_override = None
+    # If the filename follows the PLR_* convention, we can trust its fps/res.
+    fps_override: Optional[int] = None
+    res_override: Optional[str] = None
     m = TRIAL_VIDEO_RE.match(stem)
     if m:
-        fps_override = int(m.group('fps'))
-        res_override = m.group('res')
+        fps_override = int(m.group("fps"))
+        res_override = m.group("res")
 
     meta_fps, meta_w, meta_h = _get_video_props(video_path)
-    fps, w, h, px_to_mm = configure_processing_params(
-        frame_rate=meta_fps if meta_fps else (fps_override if fps_override else 0),
-        width=meta_w,
-        height=meta_h,
-        fps_override=fps_override,
-        resolution_override=res_override,
-        px_to_mm_override=None,
+
+    fps = float(fps_override) if fps_override is not None else float(meta_fps)
+
+    if res_override is not None:
+        w, h = parse_resolution(res_override)
+    else:
+        w, h = int(meta_w), int(meta_h)
+
+    px_to_mm = px_to_mm_from_resolution(w, h)
+
+    _, total_frames = video_to_images(video_path, "frames")
+    conf, diam = pupil_detection_in_folder("frames", preview_title=f"Pupil detection: {stem}")
+
+    if total_frames != len(diam):
+        # Keep a consistent length; trim to the shortest list.
+        n = min(total_frames, len(diam), len(conf))
+        total_frames = n
+        diam = diam[:n]
+        conf = conf[:n]
+
+    timestamps = calculate_timestamps(fps, total_frames)
+
+    out_dir = reset_folder(os.path.join("data", stem))
+    out_csv = os.path.join(out_dir, "raw.csv")
+
+    df = save_raw_csv(
+        frame_ids=list(range(total_frames)),
+        timestamps=timestamps,
+        diameters_px=diam,
+        confidences=conf,
+        out_csv=out_csv,
+        px_to_mm=px_to_mm,
     )
 
-    # Convert video -> frames (BMPs) and run pupil detection
-    _frameRate, totalFrames = videoToImages(video_path, "frames")
-    conf, diameter = pupilDetectionInFolder("frames/")
+    graph.plotResults(
+        df,
+        savePath=os.path.join(out_dir, "rawPlot.png"),
+        showPlot=show_raw_plot,
+        showMm=True,
+    )
 
-    # Use fps (possibly from filename override) for timestamps
-    timestamps = calculateTimeStamps(fps, totalFrames)
-
-    dataFolderPath = resetFolder(os.path.join("data", stem))
-    csvDataPath = os.path.join("data", stem, "raw.csv")
-    df = saveDataToCSV(list(range(totalFrames)), timestamps, diameter, conf, csvDataPath, px_to_mm=px_to_mm)
-
-    print(("Average pupil diameter (pixels): ", getAverageOfColumn(df, 'diameter')))
-    # Raw plot is usually helpful for debugging, but in batch mode it can spam windows.
-    graph.plotResults(df, savePath=os.path.join(dataFolderPath, "rawPlot.png"), showPlot=show_raw_plot, showMm=True)
-
-    return dataFolderPath
+    return out_dir
 
 
-def _run_preprocessing(data_dir: str):
-    """Run Pass 1->6 preprocessing (and 2-trial averaging) on a data directory."""
+def _run_preprocessing(data_dir: str) -> None:
     process_py = os.path.join(os.path.dirname(__file__), "process.py")
-    # Run as a subprocess so matplotlib uses the normal interactive backend (same as old behavior)
     cmd = [sys.executable, process_py, "--data", data_dir]
-    util.dprint("Running preprocessing pipeline: " + " ".join(cmd))
+    util.dprint("Running preprocessing: " + " ".join(cmd))
     subprocess.run(cmd, check=True)
 
 
-# ENTRY POINT
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default=None,
-                        help="A single video file, or a folder containing videos. If omitted, uses the legacy pathToVideo.")
-    parser.add_argument("--recursive", action="store_true", help="Search for videos recursively when --input is a folder.")
-    parser.add_argument("--no_raw_plot", action="store_true", help="Do not open raw interactive plot windows.")
-    parser.add_argument("--no_preprocess", action="store_true", help="Only generate raw.csv; do not run Pass 1-6 preprocessing.")
+    parser.add_argument(
+        "--input",
+        default=None,
+        help="A single video file, or a folder containing videos. If omitted, uses DEFAULT_VIDEO_PATH.",
+    )
+    parser.add_argument(
+        "--recursive",
+        action="store_true",
+        help="Search for videos recursively when --input is a folder.",
+    )
+    parser.add_argument(
+        "--no_raw_plot",
+        action="store_true",
+        help="Do not open interactive matplotlib windows for the raw plot.",
+    )
+    parser.add_argument(
+        "--no_preprocess",
+        action="store_true",
+        help="Only generate raw.csv; do not run process.py afterwards.",
+    )
     args = parser.parse_args()
 
-    input_path = args.input or pathToVideo
-
+    input_path = args.input or DEFAULT_VIDEO_PATH
     videos = _find_videos(input_path, recursive=args.recursive)
 
-    # If input is a folder but no videos were found, assume it's already a data folder and just preprocess it.
+    # If input is a folder but no videos are found, assume it is already a data folder.
     if os.path.isdir(input_path) and not videos and not args.no_preprocess:
         _run_preprocessing(input_path)
         raise SystemExit(0)
@@ -300,14 +292,15 @@ if __name__ == "__main__":
     if not videos:
         raise SystemExit(f"No videos found at: {input_path}")
 
-    # In batch mode, avoid popping up one raw plot per video unless explicitly desired
     show_raw = (len(videos) == 1) and (not args.no_raw_plot)
 
     for v in videos:
-        util.dprint(f"Processing video: {v}")
-        generateReport(v, show_raw_plot=show_raw)
+        generate_report(v, show_raw_plot=show_raw)
 
     if not args.no_preprocess:
-        # Preprocess everything in videoImplement/data (groups and averages automatically)
         data_parent = os.path.join(os.path.dirname(__file__), "data")
         _run_preprocessing(data_parent)
+
+
+if __name__ == "__main__":
+    main()
