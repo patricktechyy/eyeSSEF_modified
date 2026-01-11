@@ -1,35 +1,4 @@
 
-"""
-Feature extraction for eyeSSEF (PLR + PIPR metrics) from a single representative waveform.
-
-Input:
-- A processed waveform CSV produced by your pipeline (recommended: processed_avg.csv in *_AVG folders).
-  Required columns: timestamp (s), diameter_mm (mm)
-
-Output:
-- metrics_summary.csv in videoImplement/data/
-- per-participant plots and per-folder metrics.csv
-
-This script implements the PLR metrics you listed and a Steinhauer-style late PIPR metric:
-- Baseline pupil diameter (BPD): average prestimulus period (we compute 1 s and 10 s variants)
-- Transient PLR: peak change 180–500 ms after light onset
-- Constriction velocity: stimulus gradient (slope) of a linear model near onset
-- Peak constriction amplitude: minimum pupil size, expressed as % baseline
-- PIPR (10–30 s post-stimulus): mean baseline-corrected constriction in the 10–30 s window (unitless)
-- Net PIPR: by default we report **Blue − Red** using the above PIPR metric (unitless).
-  (We also compute the opposite convention, Red − Blue, for cross-checking.)
-
-Because your protocol has TWO stimuli (blue then red) in the same recording, we compute metrics separately for each.
-
-Notes for your protocol:
-- Blue onset nominally occurs 3.0 s after camera start.
-- Stimulus duration is 0.25 s (offset = onset + 0.25 s).
-- Red onset nominally occurs 63.25 s after camera start: 3.0 + 0.25 + 60.0.
-
-We keep the code robust by:
-- Using nominal times as defaults (good if your stimulus controller timing is stable)
-- Optionally "refining" onset by searching for the start of the constriction near the nominal time.
-"""
 
 from __future__ import annotations
 

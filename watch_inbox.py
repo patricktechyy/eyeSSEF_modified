@@ -1,27 +1,3 @@
-"""EyeSSEF inbox watcher (Mac) — SESSION MODE.
-
-You asked for this exact workflow:
-
-During ONE session (one run of this script):
-  1) New videos arrive in ~/plr_inbox (from your Pi autosend).
-  2) For each new video: run **main.py only** to generate raw.csv.
-  3) Archive the source video.
-  4) Keep doing this for all trials in the session.
-
-When you type `process` in the same Terminal:
-  - Create two folders inside the session:
-      session/.../trial/<each_video_stem>/   (raw + per-trial processed outputs)
-      session/.../average/                   (ONE averaged raw + processed outputs)
-  - For every trial in session/trial/*: run process.py (writes processed.csv + plots)
-  - Compute ONE average raw.csv across ALL trials -> session/average/raw.csv
-  - Run process.py on session/average (and SHOW interactive matplotlib windows)
-  - Exit, so the next run starts a new session.
-
-Notes:
-  - We force --resolution 1920x1080 for process.py (your constraint).
-  - Per-trial process.py runs with --no_show_plot to avoid opening a million windows.
-    The session average run DOES show interactive matplotlib windows.
-"""
 
 from __future__ import annotations
 

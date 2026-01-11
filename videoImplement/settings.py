@@ -1,14 +1,4 @@
-"""User-facing configuration for preprocessing.
 
-This module centralises the recording parameters (fps, resolution) so every preprocessing
-pass can compute time-based thresholds correctly.
-
-Notes on calibration:
-- Your project uses a pixel->mm conversion (px_to_mm, pixels per millimeter).
-- The default here scales from your historical anchor: at 1920x1080 you used px_to_mm ≈ 30.
-- This resolution-based scaling is an approximation; for best accuracy, calibrate px_to_mm
-  using a known-size object at the same camera distance.
-"""
 
 from __future__ import annotations
 

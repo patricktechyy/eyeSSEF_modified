@@ -1,25 +1,4 @@
-"""Preprocessing runner (Pass 1 -> Pass 6) with batch support.
 
-Key features (requested):
-1) FPS- & resolution-adaptive thresholds: fps and resolution are provided once (or inferred from folder name).
-2) Restored interactive plot window by default (like the older version).
-3) Quality reporting:
-   - % frames flagged after each pass and overall
-   - % frames interpolated in Pass 4
-   - warning if flagged or interpolated > 25%
-4) Batch grouping by naming convention:
-   PLR_[Username]_[EyeSide L/R]_[Resolution]_[FPS]_[TrialIndex]
-   Example: PLR_Patrick_R_1920x1080_30_2
-
-If --data points to a single trial directory (contains raw.csv), we process that one.
-If --data points to a parent directory containing many PLR_* trial directories, we:
-- group trials by (Username, Eye, Resolution, FPS)
-- take the latest 2 trials by TrialIndex (if available)
-- process each trial (Pass 1-4)
-- average the two graphs (Pass 5) only if both are fully filled (no NaNs)
-- smooth the averaged graph (Pass 6)
-- save a single averaged output folder per group
-"""
 
 from __future__ import annotations
 

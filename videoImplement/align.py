@@ -1,22 +1,4 @@
 
-"""
-align.py (eyeSSEF 8) - Feature extraction entry point
-
-Older versions of align.py were a *hardcoded experiment script* (e.g., always reading Tuna).
-This new version is the stable entry point you should use:
-
-    python align.py
-
-It will:
-- scan videoImplement/data/ for all folders ending in "_AVG"
-- for each averaged waveform (processed_avg.csv), compute PLR + PIPR metrics
-- save per-folder metrics.csv + aligned plots
-- save videoImplement/data/metrics_summary.csv
-
-Late PIPR is computed as a non-negative, baseline-corrected (drift-corrected) constriction metric over 10–30 s post-stimulus.
-
-Net PIPR is reported in the table using the **Blue − Red** convention (primary). We also save the opposite convention (Red − Blue) in metrics.csv so you can cross-check sign.
-"""
 
 import argparse
 import os
