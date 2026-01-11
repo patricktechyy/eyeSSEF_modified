@@ -10,21 +10,21 @@ It also includes an optional **"inbox watcher" workflow** to automatically proce
 
 ---
 
-## Quick start (manual)
+## Quick start
 
 ### 1) Install
 In order to install, please follow the full installation guide:
 - **docs/INSTALL.md**
 
-### 2) Run on one video
+### 2) Manually run the pipeline on one video
 From the repo root:
 ```bash
 python -m venv .venv
-# activating your venv (see docs/INSTALL.md)
+# to activate your venv (see docs/INSTALL.md)
 
 python videoImplement/main.py --input path/to/your_video.mp4 --no_raw_plot
 ```
-Outputs are created under:
+Outputs will be created under:
 ```
 videoImplement/data/<video_stem>/
   raw.csv
@@ -36,24 +36,25 @@ videoImplement/data/<video_stem>/
 
 ---
 
-## Automated workflow (Pi upload → computer inbox → session processing)
+## Automated workflow (Pi → macOS inbox → session processing)
+Note: this will only work for macOS
 
-If your Raspberry Pi is uploading trial videos to a folder on your computer (e.g., via `rsync`), you can run:
+If your Raspberry Pi is uploading trial videos to a folder on your Mac system (e.g., via `rsync`), you can run:
 
 ```bash
 python watch_inbox.py --inbox ~/plr_inbox
 ```
 
-This runs in **session mode**:
-- each incoming video is converted to a trial folder (raw extraction)
+This will run in **session mode**, meaning:
+- each incoming video is converted to a trial folder (for raw extraction)
 - when you type `process`, it processes all captured trials and generates **one** session average
 
-Full setup steps:
-- **AUTO_TRANSFER_MAC.md** (Pi → Mac example)
+Full setup steps for the automated workflow:
+- **AUTO_TRANSFER_MAC.md** 
 
 ---
 
-## Documentation
+## Documentation (very important)
 
 - **docs/INSTALL.md** — install Python + dependencies (including PyPupilEXT)
 - **docs/USAGE.md** — how to run `main.py`, `process.py`, batch mode, and naming conventions
@@ -67,16 +68,16 @@ Full setup steps:
 - `videoImplement/main.py`
   - Decodes video → frames
   - Runs pupil detection per frame
-  - Writes `raw.csv` and `rawPlot.png`
+  - Results in `raw.csv` and `rawPlot.png`
 
 - `videoImplement/process.py`
   - Runs preprocessing passes
-  - Writes `processed.csv` and `processedPlot.png`
-  - In batch mode, also writes one averaged output folder per recording setting
+  - Results in `processed.csv` and `processedPlot.png`
+  - In automated workflow mode, also writes one averaged output folder per recording setting
 
 ---
 
-## Video naming convention (recommended)
+## Video naming
 
 Please name the trial videos like the following example:
 
