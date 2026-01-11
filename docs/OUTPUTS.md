@@ -1,56 +1,49 @@
-# Outputs and folder structure
+# Folder and Structures
 
-## 1) Manual mode (`videoImplement/main.py`)
+There's 2 way of running eyeSSEF
+---
+## 1) Manual mode (from `videoImplement/main.py`)
 
-When you run:
+When running:
 
 ```bash
 python videoImplement/main.py --input <video>
 ```
 
-EyeSSEF creates one folder per video under:
+EyeSSEF will create one folder per video under:
 
 ```
 videoImplement/data/<video_stem>/
 ```
 
-Inside that folder:
+Inside that folder it will contain:
 
 | File | What it is |
 |---|---|
-| `raw.csv` | Frame-by-frame pupil estimate (pixels + mm), timestamps, and confidence |
-| `rawPlot.png` | Plot of the raw pupil diameter trace |
+| `raw.csv` | This file will contain the pupil estimate (pixels + mm), timestamps, as well as the confidence of the estimate |
+| `rawPlot.png` | This is an image of the plot of the raw pupil diameter |
 | `processed_interpolated.csv` | Output after Pass 1–4 (flagging + interpolation) |
-| `processed.csv` | Final signal after Pass 6 (Savitzky–Golay smoothing) |
-| `processedPlot.png` | Plot of the final processed trace |
-
-### `raw.csv` columns
-
-- `frame_id` — integer frame index
-- `timestamp` — seconds from start (derived from fps)
-- `diameter` — pupil diameter estimate in **pixels**
-- `confidence` — ellipse/outline confidence (0–1)
-- `is_bad_data` — `True` if confidence < threshold (default 0.75) or missing value
-- `diameter_mm` — diameter converted to **mm** (using px/mm calibration)
+| `processed.csv` | The final result after Pass 6 (Savitzky–Golay smoothing) |
+| `processedPlot.png` | Image of the plot of the final processed result |
 
 ---
 
-## 2) Batch averaging (`videoImplement/process.py` in batch mode)
+## 2) Processing (`videoImplement/process.py`)
 
-When you run:
+When running:
 
 ```bash
 python videoImplement/process.py --data videoImplement/data
 ```
 
-`process.py` groups trials by:
+`process.py` will group trials by:
 
 - user
 - eye side (L/R)
 - resolution
 - fps
 
-Then it processes the **latest two** trials in each group and produces an averaged output folder:
+Then it will process the **latest two** trials in each group and produces the following output folder:
 
 ```
 videoImplement/data/PLR_<user>_<eye>_<res>_<fps>_AVG/
@@ -61,7 +54,7 @@ videoImplement/data/PLR_<user>_<eye>_<res>_<fps>_AVG/
 
 ---
 
-## 3) Inbox watcher sessions (`watch_inbox.py`)
+## 3) Inbox watcher sessions (`watch_inbox.py`, most recommended way of running) 
 
 Session mode outputs go under:
 
@@ -78,6 +71,6 @@ videoImplement/sessions/session_<YYYYMMDD_HHMMSS>/
     processedPlot.png
 ```
 
-Key idea:
+Notes:
 - `trial/` contains per-trial results
 - `average/` contains **one** averaged result across *all* trials in that session

@@ -1,9 +1,9 @@
 # Usage
 
-This repo has two main ways to run:
+There's 2 way of running eyeSSEF
 
-1) **Manual / batch**: you run `videoImplement/main.py` and `videoImplement/process.py` yourself.
-2) **Inbox watcher**: `watch_inbox.py` monitors an “inbox” folder and builds a session automatically.
+1) **Manual**: you can run `videoImplement/main.py` and `videoImplement/process.py` yourself.
+2) **Inbox watcher**: `watch_inbox.py` monitors an “inbox” folder and creates a session automatically.
 
 ---
 
@@ -11,17 +11,17 @@ This repo has two main ways to run:
 
 ### 1) Process one video (raw + processed)
 
-From the repo root:
+From the repo's root:
 
 ```bash
 python videoImplement/main.py --input path/to/video.mp4 --no_raw_plot
 ```
 
 This will:
-- extract frames
-- run pupil detection
-- write `raw.csv` + `rawPlot.png`
-- run preprocessing and write `processed.csv` + `processedPlot.png`
+- extract frames from the video
+- run the pupil detection
+- Outputs `raw.csv` + `rawPlot.png`
+- run preprocessing and outputs `processed.csv` + `processedPlot.png`
 
 Output folder:
 
@@ -34,7 +34,7 @@ videoImplement/data/<video_stem>/
   processedPlot.png
 ```
 
-### 2) Process a whole folder of videos
+### 2) Process a whole folder of trial videos
 
 ```bash
 python videoImplement/main.py --input path/to/folder --recursive --no_raw_plot
@@ -48,32 +48,23 @@ python videoImplement/main.py --input path/to/video.mp4 --no_raw_plot --no_prepr
 
 ---
 
-## B. Running `process.py` directly
+## B. Running `process.py`
 
-### 1) Single-trial mode (folder that already contains raw.csv)
+### 1) Single-trial mode (this only works with folder that already contains raw.csv)
 
 ```bash
 python videoImplement/process.py --data videoImplement/data/PLR_Patrick_R_1920x1080_30_2 --resolution 1920x1080 --fps 30
 ```
 
-Notes:
-- If the trial folder name follows the `PLR_...` convention, you often do **not** need to supply `--fps`.
-- If `diameter_mm` is missing or you changed your px/mm calibration, add `--recompute_mm`.
-
-### 2) Batch mode (parent folder containing many PLR_* trial folders)
+### 2) Batch mode (many trial folders)
 
 ```bash
 python videoImplement/process.py --data videoImplement/data
 ```
 
-Batch mode will:
-- process each trial folder
-- create one averaged output folder per group:
-  `PLR_<user>_<eye>_<res>_<fps>_AVG/`
-
 ---
 
-## C. Video naming convention (recommended)
+## C. How to name your videos (very recommended)
 
 Name trial videos like:
 
@@ -84,15 +75,15 @@ Example:
 PLR_Patrick_R_1920x1080_30_2.mp4
 ```
 
-Why this matters:
-- `main.py` can reliably infer fps/res without guessing.
-- `process.py` can group and average trials correctly.
+In order to:
+- `main.py` reliably infer fps/res.
+- `process.py` group and average trials correctly.
 
 ---
 
-## D. Inbox watcher (session mode)
+## D. Automated workflow
 
-### 1) Create the inbox folders
+### 1) Ensure that these inbox folders are created
 
 ```bash
 mkdir -p ~/plr_inbox
@@ -116,20 +107,18 @@ The watcher will automatically:
 - wait until file size is stable
 - run `main.py` raw extraction
 - move trial results into `videoImplement/sessions/session_<timestamp>/trial/`
-- archive source videos into `~/plr_inbox/_archive/`
+- archive videos into `~/plr_inbox/_archive/`
 
 ### 4) Process the session
 
-In the same terminal where the watcher is running, type:
+Type the following and enter:
 
 ```
 process
 ```
 
 This will:
-- process all trials (no pop-up plots)
+- process all trials
 - build exactly **one** session average in:
   `videoImplement/sessions/session_<timestamp>/average/raw.csv`
-- process the average (and show the plots)
-
-If you do **not** want interactive plots, see `docs/TROUBLESHOOTING.md`.
+- process the average (and show the interactive plots)
